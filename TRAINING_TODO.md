@@ -58,9 +58,9 @@ Important: Apollo’s implementation keeps **voxelization / scatter / BEV extra 
 This is the most important “silent mismatch” risk when writing training code: if your 9D feature math differs slightly from Apollo runtime, the model can train and converge but won’t match car-side behavior.
 
 Source of truth in this repo (of course these code can not be compiled, only for reference):
-- `modules/perception/lidar/lib/detector/center_point_trt/center_point_trt.cu`
+- `reference/center_point_trt.cu`
   - `Point2GridKernel`, `PointCloudSumKernel`, `VoxelFeatureKernel`
-- `modules/perception/lidar/lib/detector/center_point_trt/center_point_trt.cc`
+- `reference/center_point_trt.cc`
   - `x_offset_ / y_offset_` definition in `CenterPointTRT::LoadParams()`
 
 ### 0) Input fields
