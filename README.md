@@ -1,17 +1,17 @@
 # CenterPointTRT — MMDetection3D Training + ONNX Export
 
-This folder provides a **training + export scaffold** for the Wheel.OS bussiness version
+This folder provides a **training + export scaffold** for the Wheel.OS business version
 `CenterPointTRT` inference contract used in this repo:
 
 - `cpdet_pfe.onnx`: point-wise PFE, **`voxels -> pillar_feature`**
-- `cpdet_backbone.onnx`: BEV backbone+head, **`canvas_feature -> (bbox_preds, scores, dir_scores)`**
+- `cpdet_backbone.onnx`: BEV backbone+head, **`canvas_feature -> (scores, bbox_preds, dir_scores)`**
 
 Important: **voxelization / scatter are *not* inside ONNX** in Apollo's
 implementation. They are done by C++/CUDA pre/post-processing.
 
 ## Contract (must match car-side inference)
 
-From `modules/perception/lidar_cpdet_detection/data/cpdet_param.pb.txt` on Apollo bussiness version and the
+From `modules/perception/lidar_cpdet_detection/data/cpdet_param.pb.txt` on Apollo business version and the
 current C++ inference:
 
 - PFE input `voxels`: `[N, 9]` (or `[N, 1, 9, 1]`) where each row is a **point**
@@ -78,7 +78,7 @@ are project-specific. The model-side contract above is the key.
 After training, export with:
 
 ```bash
-python3 modules/perception/lidar/tools/center_point_trt_mmdet3d/tools/export_onnx.py \
+python3 tools/export_onnx.py \
   --config /path/to/your_mmdet3d_cfg.py \
   --checkpoint /path/to/epoch_xx.pth \
   --strip-identity \
@@ -98,7 +98,7 @@ If you only want to inspect the graph structure in Netron, you can export
 without a checkpoint (random weights):
 
 ```bash
-python3 modules/perception/lidar/tools/center_point_trt_mmdet3d/tools/export_onnx.py \
+python3 tools/export_onnx.py \
   --config /path/to/your_mmdet3d_cfg.py \
   --strip-identity \
   --out-dir /tmp/center_point_trt_onnx
@@ -109,7 +109,7 @@ python3 modules/perception/lidar/tools/center_point_trt_mmdet3d/tools/export_onn
 Install `onnx` in the same env, then run:
 
 ```bash
-python3 modules/perception/lidar/tools/center_point_trt_mmdet3d/tools/diff_onnx.py \
+python3 tools/diff_onnx.py \
   --a modules/perception/production/data/perception/lidar/models/detection/center_point_trt/cpdet_backbone.onnx \
   --b /tmp/center_point_trt_onnx/cpdet_backbone.onnx
 ```

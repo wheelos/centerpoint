@@ -156,6 +156,61 @@ Apollo runtime forms `voxels` as a per-point feature table (not “T points per 
 - logical: `[N, 9]`
 - export tooling uses: `[N, 1, 9, 1]` (equivalent, easier to match Apollo ONNX ops)
 
+## CNNSEG extra BEV features (16ch) — Definition & Channel Order
+
+When `use_cnnseg_features=true`, Apollo appends **16 extra BEV channels** to the backbone input:
+
+- `canvas_feature` input to backbone: `[1, 64, 512, 512]`
+  - first **48ch**: pillar scatter-max features (from PFE output)
+  - next **16ch**: “cnnseg extra BEV features” (hand-crafted)
+
+### Channel order (important for training alignment)
+
+The channels are stored immediately after the 48 pillar channels, in this exact order (see `feature_offset_` setup in `center_point_trt.cc`):
+
+1. `max_height` (1ch)
+2. `mean_height` (1ch)
+3. `top_intensity` (1ch)
+4. `mean_intensity` (1ch)
+5. `count` (1ch)
+6. `nonempty` (1ch)
+7. `height_bin[0..height_bin_dim-1]` (`height_bin_dim` ch, typically 10)
+
+With `height_bin_dim=10`, total = `1+1+1+1+1+1+10 = 16` channels.
+
+### Per-cell definitions (grid_idx = y * grid_x_size + x)
+
+All features are computed per BEV cell using points that successfully mapped to a grid cell (`point2grid != -1`).
+`enable_rotate_45degree` affects **which cell** a point lands in (because it changes `point2grid`), but does not change how these features use `z/intensity`.
+
+- `max_height`:
+  - `max(z)` over points in the cell
+  - if empty, set to `0`
+
+- `mean_height`:
+  - `mean(z)` over points in the cell
+  - if empty, stays `0`
+
+- `mean_intensity`:
+  - `mean(intensity/255)` over points in the cell
+  - if empty, stays `0`
+
+- `top_intensity`:
+  - `intensity/255` of the point whose `z == max_height` in the cell
+  - if empty, `0`
+
+- `count`:
+  - let `n = number_of_points_in_cell`
+  - stored as: `int(log(1 + n))` (log-compressed, integer written into a float buffer)
+
+- `nonempty`:
+  - `1` if `n > 0`, else `0`
+
+- `height_bin[k]` (one-hot occupancy per height slice):
+  - compute `k = int((z - height_bin_min_height) / height_bin_voxel_size)`
+  - clamp `k` into `[0, height_bin_dim-1]`
+  - set `height_bin[k] = 1` if any point in that bin exists in the cell (else 0)
+
 ## Code Layout
 
 Core modules (PyTorch side):
@@ -280,7 +335,7 @@ Expected summary for a fully aligned backbone:
 - `task_heads: 4 ids=['0','1','2','3']`
 - outputs `scores(1,4,128,128) bbox_preds(1,24,128,128) dir_scores(1,8,128,128)`
 - first Conv `w=(64,64,1,1)`
-s
+
 ## Known Pitfalls / Lessons Learned (from this integration)
 
 - MMDet3D version drift:
