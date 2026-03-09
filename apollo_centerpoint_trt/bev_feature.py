@@ -129,6 +129,37 @@ class ApolloBevFeatureGenerator(torch.nn.Module):
     fpixel = (pc_axis - start_range) / voxel_size
     return torch.floor(fpixel).to(torch.int64)
 
+  def _compute_grid(
+      self, points_xyzi: torch.Tensor
+  ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute valid mask and grid coords for each point.
+
+    Returns:
+      valid: [N] bool
+      pos_x: [N] int64 (undefined for invalid points)
+      pos_y: [N] int64 (undefined for invalid points)
+      xy_rot: [N, 2] rotated (or original) xy used for voxel feature math
+    """
+    cfg = self.cfg
+    xy = points_xyzi[:, 0:2]
+    z = points_xyzi[:, 2]
+
+    if cfg.enable_rotate_45degree:
+      xy_rot = self._rotate45(xy)
+    else:
+      xy_rot = xy
+
+    pos_x = self._pc_to_pixel(xy_rot[:, 0], cfg.voxel_x_size, cfg.min_x_range)
+    pos_y = self._pc_to_pixel(xy_rot[:, 1], cfg.voxel_y_size, cfg.min_y_range)
+
+    # Align to CUDA Point2GridKernel behavior: filter by xy bounds AND z-range.
+    valid = (
+        (pos_x >= 0) & (pos_x < self.grid_x_size) &
+        (pos_y >= 0) & (pos_y < self.grid_y_size) &
+        (z >= cfg.min_z_range) & (z <= cfg.max_z_range)
+    )
+    return valid, pos_x, pos_y, xy_rot
+
   @torch.no_grad()
   def build_voxel_features(
       self, points_xyzi: torch.Tensor
@@ -153,18 +184,7 @@ class ApolloBevFeatureGenerator(torch.nn.Module):
     z = pts[:, 2:3]
     intensity = pts[:, 3:4]
 
-    if cfg.enable_rotate_45degree:
-      xy_rot = self._rotate45(xy)
-    else:
-      xy_rot = xy
-
-    pos_x = self._pc_to_pixel(xy_rot[:, 0], cfg.voxel_x_size, cfg.min_x_range)
-    pos_y = self._pc_to_pixel(xy_rot[:, 1], cfg.voxel_y_size, cfg.min_y_range)
-
-    valid = (
-        (pos_x >= 0) & (pos_x < self.grid_x_size) &
-        (pos_y >= 0) & (pos_y < self.grid_y_size)
-    )
+    valid, pos_x, pos_y, xy_rot = self._compute_grid(pts)
     if not torch.any(valid):
       empty = pts.new_zeros((0, 9))
       return empty, pts.new_zeros((0,), dtype=torch.long), pts.new_zeros((0, 2), dtype=torch.long)
@@ -221,7 +241,7 @@ class ApolloBevFeatureGenerator(torch.nn.Module):
     device = grid_idx.device
     dtype = pz.dtype
 
-    max_h = _scatter_max(pz, grid_idx, self.map_size)  # [map, 1]
+    max_h = _scatter_max(pz, grid_idx, self.map_size)  # [map, 1] (empty -> very negative)
     sum_h = _scatter_add(pz, grid_idx, self.map_size)
     sum_i = _scatter_add(intensity, grid_idx, self.map_size)
     ones = torch.ones((grid_idx.size(0), 1), dtype=dtype, device=device)
@@ -229,15 +249,25 @@ class ApolloBevFeatureGenerator(torch.nn.Module):
     mean_h = sum_h / cnt.clamp_min_(1.0)
     mean_i = sum_i / cnt.clamp_min_(1.0)
 
-    # top_intensity: intensity of (one of) the highest points in the cell.
-    # We compute it as max intensity among points that reach max height.
+    # Align to C++/CUDA:
+    # - empty cell: max_height is set to 0
+    # - top_intensity is set for points where pz == max_height (ties are not
+    #   strictly defined in the CUDA implementation; we pick a stable value).
+    max_h = torch.where(cnt > 0, max_h, torch.zeros_like(max_h))
+
     max_h_pts = max_h[grid_idx]
-    same_as_max = (pz >= (max_h_pts - 1e-6))
-    masked_i = torch.where(same_as_max, intensity, intensity.new_full(intensity.shape, -torch.finfo(dtype).max))
+    same_as_max = (pz == max_h_pts)
+    masked_i = torch.where(
+        same_as_max,
+        intensity,
+        intensity.new_full(intensity.shape, -torch.finfo(dtype).max),
+    )
     top_i = _scatter_max(masked_i, grid_idx, self.map_size)
 
     nonempty = (cnt > 0).to(dtype)
-    count_feat = torch.log1p(cnt).to(dtype)
+    # count: int(log(1 + n)) stored into float buffer
+    count_int = cnt.to(torch.int64)
+    count_feat = torch.floor(torch.log1p(count_int.to(dtype))).to(dtype)
 
     # height bin occupancy
     hdim = cfg.height_bin_dim()
@@ -290,32 +320,10 @@ class ApolloBevFeatureGenerator(torch.nn.Module):
 
     channels = [bev_pf]
     if cfg.use_cnnseg_features:
-      # Use rotated pz/intensity domain to match C++ statistics.
-      # build_voxel_features already filtered points; reuse those points.
-      # Recompute pz/intensity for the valid subset to avoid extra masking state.
-      # Note: intensity is normalized like C++ when use_input_norm is true.
-      valid_pts = points_xyzi  # original
-      # Recreate the valid mask implicitly by using voxels' normalized x channel:
-      # build_voxel_features already performed filtering; use its selection order.
-      # We cannot recover the valid mask here without redoing filtering; do it once:
-      pts = points_xyzi
-      xy = pts[:, 0:2]
-      z = pts[:, 2:3]
-      intensity = pts[:, 3:4]
-      if cfg.enable_rotate_45degree:
-        xy_rot = self._rotate45(xy)
-      else:
-        xy_rot = xy
-      pos_x = self._pc_to_pixel(xy_rot[:, 0], cfg.voxel_x_size, cfg.min_x_range)
-      pos_y = self._pc_to_pixel(xy_rot[:, 1], cfg.voxel_y_size, cfg.min_y_range)
-      valid = (
-          (pos_x >= 0) & (pos_x < self.grid_x_size) &
-          (pos_y >= 0) & (pos_y < self.grid_y_size)
-      )
-      z = z[valid]
-      intensity = intensity[valid]
-      if cfg.use_input_norm:
-        intensity = intensity / cfg.intensity_scale
+      valid, _, _, _ = self._compute_grid(points_xyzi)
+      z = points_xyzi[:, 2:3][valid]
+      # C++/CUDA always uses intensity/255 for cnnseg features regardless of use_input_norm.
+      intensity = points_xyzi[:, 3:4][valid] / cfg.intensity_scale
       # cnnseg features are derived from raw points only; they do not need grad.
       cnn = self.build_cnnseg_features(grid_idx, z, intensity).detach()
       channels.append(cnn)

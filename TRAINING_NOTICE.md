@@ -220,6 +220,13 @@ Core modules (PyTorch side):
 - `apollo_centerpoint_trt/bev_feature.py`:
   - `ApolloBevFeatureGenerator`: feature math aligned to Apollo C++
   - uses scatter-max; “cnnseg features” are `detach()`’d (treated as fixed features)
+- `apollo_centerpoint_trt/transforms/map_classes_3d.py`:
+  - `ApolloMapClasses3D`: dataset-agnostic label remapping helper for MMDet3D pipelines
+  - supports collapsing dataset classes into the 4-task label space used by Apollo TRT
+- `apollo_centerpoint_trt/metrics/merged_ap_3d.py`:
+  - `ApolloMergedClassMetric3D`: simple internal BEV mAP for merged-class training (not official nuScenes metric)
+- `apollo_centerpoint_trt/hooks/early_stopping.py`:
+  - `ApolloEarlyStoppingHook`: project-local early stopping hook that monitors validation metrics such as `apollo/mAP`
 - `apollo_centerpoint_trt/backbone.py`:
   - `ApolloSecondBackboneLite`: custom Conv+ReLU backbone (no BN) matching shipped ONNX
 - `apollo_centerpoint_trt/neck.py`:
@@ -257,7 +264,7 @@ Do NOT attempt to train from the exported ONNX directly. Use PyTorch modules and
 
 Recommended training path:
 
-1) Use MMDet3D `tools/train.py` + MMEngine runner
+1) Use this repo's `tools/train.py` (MMEngine runner) or an equivalent MMDet3D launcher
 2) Register this project as a plugin via `custom_imports`
 3) Set `model.type = "CenterPointTRTDetector"` (not `CenterPointTRTExportModel`)
 4) Compose:
@@ -277,6 +284,38 @@ Recommended training path:
   - metainfo (if your head’s coder/predict needs it)
 
 You will need to implement a dataset + pipeline that yields the above.
+
+### nuScenes quick-start scaffold (4-task mapping)
+
+This repo includes an example MMDet3D 1.x training scaffold for nuScenes:
+
+- `mmdet3d_example_configs/centerpoint_trt_nuscenes_4task_train.py`
+  - uses `ApolloMapClasses3D` to map nuScenes 10-class labels into 4 tasks
+  - includes a full MMEngine runner config: dataloaders, loops, optimizer, scheduler, hooks
+  - validates with `ApolloMergedClassMetric3D` (internal merged-class BEV mAP, not official nuScenes metric)
+  - early-stops on `apollo/mAP` after patience is exhausted
+
+Example command:
+
+```bash
+python3 tools/train.py \
+  mmdet3d_example_configs/centerpoint_trt_nuscenes_4task_train.py
+```
+
+### Three things that are easy to confuse
+
+- `--amp`
+  - mixed-precision training only
+  - affects numeric precision / memory / throughput
+  - does not change dataset samples or Apollo preprocessing semantics
+- data augmentation
+  - configured in the dataset `train_pipeline`
+  - examples: `GlobalRotScaleTrans`, `RandomFlip3D`, `PointShuffle`
+  - used to improve robustness during training
+- Apollo preprocessing
+  - implemented by `ApolloBevFeatureGenerator` in the model path
+  - defines the train/export/inference contract: 45 degree rotation, 9D voxel feature, scatter-max, cnnseg features
+  - if this drifts from car-side preprocessing, training quality may look fine offline but degrade online
 
 ### Registry / scope gotchas (MMDet3D 1.4.0)
 

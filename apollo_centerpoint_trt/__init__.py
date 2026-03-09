@@ -7,3 +7,6 @@ from .export_wrappers import BackboneHeadExportWrapper  # noqa: F401
 from .mmdet3d_centerpoint_trt import CenterPointTRTDetector  # noqa: F401
 from .mmdet3d_centerpoint_trt import register_to_mmdet3d  # noqa: F401
 from .export_model import CenterPointTRTExportModel  # noqa: F401
+from .transforms.map_classes_3d import ApolloMapClasses3D  # noqa: F401
+from .metrics.merged_ap_3d import ApolloMergedClassMetric3D  # noqa: F401
+from .hooks.early_stopping import ApolloEarlyStoppingHook  # noqa: F401

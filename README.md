@@ -51,9 +51,38 @@ You run this in your **training environment**, not inside Apollo.
 - MMDetection3D installed (version depends on your stack). The export script
   expects a CenterPoint-like model with `pts_backbone/pts_neck/pts_bbox_head`.
 
+Recommended pinned environment for this repo:
+
+```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
+```
+
+The pinned stack is:
+
+- `Python 3.10.12`
+- `PyTorch 2.1.2 + cu121`
+- `MMEngine 0.10.5`
+- `MMCV 2.1.0`
+- `MMDetection 3.3.0`
+- `MMDetection3D 1.4.0`
+
+The top-level [requirements.txt](/home/soon/Desktop/center_point_trt_mmdet3d/requirements.txt) points to the pinned CUDA 12.1 stack in [requirements-cu121.txt](/home/soon/Desktop/center_point_trt_mmdet3d/requirements/requirements-cu121.txt).
+
+If you prefer to install the pinned file directly:
+
+```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+pip install -r requirements/requirements-cu121.txt
+```
+
 ## Usage
 
-### 1) Train (MMDetection3D)
+### 1) Train (MMDetection3D / MMEngine)
 
 Integrate `apollo_centerpoint_trt` as a plugin in your MMDetection3D repo and
 create a model that:
@@ -70,8 +99,71 @@ custom_imports = dict(imports=["apollo_centerpoint_trt"], allow_failed_imports=F
 model = dict(type="CenterPointTRTDetector", ...)
 ```
 
-This repo does **not** include a full runnable dataset config, since datasets
-are project-specific. The model-side contract above is the key.
+This repo includes a local training entrypoint:
+
+```bash
+python3 tools/train.py \
+  mmdet3d_example_configs/centerpoint_trt_nuscenes_4task_train.py
+```
+
+The bundled nuScenes config is a runnable scaffold for MMDetection3D 1.x, but
+you still need to edit dataset paths / info files for your environment.
+
+Common variants:
+
+```bash
+python3 tools/train.py \
+  mmdet3d_example_configs/centerpoint_trt_nuscenes_4task_train.py \
+  --amp
+```
+
+```bash
+python3 tools/train.py \
+  mmdet3d_example_configs/centerpoint_trt_nuscenes_4task_train.py \
+  --resume
+```
+
+Do not mix up these three categories:
+
+- `--amp`
+  - training acceleration only
+  - switches `optim_wrapper` from `OptimWrapper` to `AmpOptimWrapper`
+  - reduces memory / may improve throughput
+  - does **not** change points, labels, targets, or model semantics
+- data augmentation in the dataset pipeline
+  - current nuScenes example uses `GlobalRotScaleTrans`, `RandomFlip3D`, `PointShuffle`
+  - only active in the training pipeline
+  - changes the sampled training data distribution on purpose to improve robustness
+- Apollo-aligned preprocessing
+  - implemented by `ApolloBevFeatureGenerator` inside the model
+  - includes 45 degree xy rotation, 9D voxel feature construction, scatter-max, and 16-channel cnnseg features
+  - must stay aligned with car-side inference if you want train/inference consistency
+
+In short:
+
+- `--amp` = faster / lighter training
+- data augmentation = perturb training samples
+- Apollo preprocessing = inference contract you are trying to learn against
+
+Important training details in the bundled config:
+
+- fixed Apollo-aligned preprocessing (`enable_rotate_45degree=True`, 9D voxel feature, 48+16 BEV channels)
+- 4 tasks / 4 output heads: `car`, `pedestrian`, `bicycle`, `traffic_cone`
+- nuScenes 10-class -> 4-task class remapping via `ApolloMapClasses3D`
+- internal merged-class BEV mAP validation via `ApolloMergedClassMetric3D`
+- training-time augmentation in the example config:
+  - `GlobalRotScaleTrans`: random rotation / scale perturbation
+  - `RandomFlip3D`: random BEV flips
+  - `PointShuffle`: random point order shuffle
+- default optimizer / schedule:
+  - `AdamW(lr=2e-4, betas=(0.95, 0.99), weight_decay=0.01)`
+  - `20` epochs
+  - linear warmup for first `1000` iters + cosine annealing
+- early stopping:
+  - monitors `apollo/mAP`
+  - starts checking from epoch `5`
+  - stops if there is no improvement for `5` validation epochs
+  - best checkpoint is still tracked by `CheckpointHook(save_best="apollo/mAP")`
 
 ### 2) Export ONNX
 
