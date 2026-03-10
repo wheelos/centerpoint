@@ -238,7 +238,7 @@ if torch is not None and not _is_lazy_proxy(torch):
               self.bev_gen.cfg.pillar_feature_dim +
               self.bev_gen.cfg.cnnseg_feature_dim
           )
-          canvas = pts_xyzi.new_zeros((1, channels, gx, gy))
+          canvas = pts_xyzi.new_zeros((1, channels, gy, gx))
           bad_canvas = _find_non_finite(canvas, f"canvas[{sample_idx}]")
           if bad_canvas is not None:
             raise RuntimeError(f"Non-finite value detected in {bad_canvas}")

@@ -308,7 +308,7 @@ class ApolloBevFeatureGenerator(torch.nn.Module):
       pillar_feature: [M, pillar_feature_dim] from PFE, must align with valid points.
 
     Returns:
-      canvas_feature: [1, (pillar_feature_dim + cnnseg_feature_dim), grid_x, grid_y]
+      canvas_feature: [1, (pillar_feature_dim + cnnseg_feature_dim), grid_y, grid_x]
     """
     cfg = self.cfg
     voxels, grid_idx, _ = self.build_voxel_features(points_xyzi)
@@ -342,6 +342,8 @@ class ApolloBevFeatureGenerator(torch.nn.Module):
 
     bev = torch.cat(channels, dim=-1)  # [map, C]
     C = bev.size(-1)
-    # Layout: match Apollo config (grid_x, grid_y). Note the square default.
-    canvas = bev.t().contiguous().view(1, C, self.grid_x_size, self.grid_y_size)
+    # Use standard dense BEV layout [B, C, y, x]. The flattened `grid_idx`
+    # already follows `y * grid_x + x`, so reshaping as [grid_y, grid_x] keeps
+    # the spatial semantics aligned with MMDet3D's target generation.
+    canvas = bev.t().contiguous().view(1, C, self.grid_y_size, self.grid_x_size)
     return canvas

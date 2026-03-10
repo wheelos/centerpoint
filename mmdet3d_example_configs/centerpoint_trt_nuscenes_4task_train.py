@@ -80,14 +80,14 @@ head_test_cfg = dict(
         post_center_limit_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
         max_per_img=500,
         max_pool_nms=False,
-        min_radius=[4, 4, 4, 4],
+        min_radius=[4, 0.85, 0.85, 0.175],
         score_threshold=0.1,
         pc_range=[-51.2, -51.2],
         out_size_factor=4,
         voxel_size=[0.2, 0.2],
         nms_type="rotate",
-        pre_max_size=4096,
-        post_max_size=500,
+        pre_max_size=1000,
+        post_max_size=83,
         nms_thr=0.2,
     )
 )
@@ -251,8 +251,11 @@ train_pipeline = [
     dict(type="LoadAnnotations3D", with_bbox_3d=True, with_label_3d=True),
     dict(type="ObjectSample", db_sampler=db_sampler),
     # Training-time augmentation. These are not part of Apollo car-side preprocessing.
-    dict(type="PointsRangeFilter", point_cloud_range=point_cloud_range),
-    dict(type="ObjectRangeFilter", point_cloud_range=point_cloud_range),
+    dict(
+        type="ApolloRangeFilter3D",
+        point_cloud_range=point_cloud_range,
+        enable_rotate_45degree=bev_feature_cfg["enable_rotate_45degree"],
+    ),
     dict(
         type="GlobalRotScaleTrans",
         rot_range=[-0.3925, 0.3925],
@@ -282,8 +285,11 @@ val_pipeline = [
         test_mode=True,
     ),
     dict(type="LoadAnnotations3D", with_bbox_3d=True, with_label_3d=True),
-    dict(type="PointsRangeFilter", point_cloud_range=point_cloud_range),
-    dict(type="ObjectRangeFilter", point_cloud_range=point_cloud_range),
+    dict(
+        type="ApolloRangeFilter3D",
+        point_cloud_range=point_cloud_range,
+        enable_rotate_45degree=bev_feature_cfg["enable_rotate_45degree"],
+    ),
     dict(type="ApolloMapClasses3D", mapping=class_mapping, src_classes=nuscenes_classes),
     dict(type="Pack3DDetInputs", keys=["points", "gt_bboxes_3d", "gt_labels_3d"]),
 ]
@@ -299,26 +305,34 @@ test_pipeline = [
         remove_close=True,
         test_mode=True,
     ),
-    dict(type="PointsRangeFilter", point_cloud_range=point_cloud_range),
+    dict(
+        type="ApolloRangeFilter3D",
+        point_cloud_range=point_cloud_range,
+        enable_rotate_45degree=bev_feature_cfg["enable_rotate_45degree"],
+    ),
     dict(type="Pack3DDetInputs", keys=["points"]),
 ]
 
 train_dataloader = dict(
-    batch_size=2,
+    batch_size=4,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type="DefaultSampler", shuffle=True),
     dataset=dict(
-        type="NuScenesDataset",
-        data_root=data_root,
-        ann_file="nuscenes_infos_train.pkl",
-        data_prefix=dict(
-            pts="samples/LIDAR_TOP",
-            sweeps="sweeps/LIDAR_TOP",
+        type="CBGSDataset",
+        dataset=dict(
+            type="NuScenesDataset",
+            data_root=data_root,
+            ann_file="nuscenes_infos_train.pkl",
+            data_prefix=dict(
+                pts="samples/LIDAR_TOP",
+                sweeps="sweeps/LIDAR_TOP",
+            ),
+            metainfo=dict(classes=nuscenes_classes),
+            pipeline=train_pipeline,
+            test_mode=False,
+            use_valid_flag=True,
         ),
-        metainfo=dict(classes=nuscenes_classes),
-        pipeline=train_pipeline,
-        test_mode=False,
     ),
     collate_fn=dict(type="pseudo_collate"),
 )
@@ -339,6 +353,7 @@ val_dataloader = dict(
         metainfo=dict(classes=nuscenes_classes),
         pipeline=val_pipeline,
         test_mode=False,
+        use_valid_flag=True,
     ),
     collate_fn=dict(type="pseudo_collate"),
 )
@@ -361,6 +376,7 @@ test_dataloader = dict(
         # predictions against packed `gt_instances_3d`.
         pipeline=val_pipeline,
         test_mode=False,
+        use_valid_flag=True,
     ),
     collate_fn=dict(type="pseudo_collate"),
 )
@@ -412,6 +428,7 @@ train_eval_dataloader = dict(
         metainfo=dict(classes=nuscenes_classes),
         pipeline=val_pipeline,
         test_mode=False,
+        use_valid_flag=True,
     ),
     collate_fn=dict(type="pseudo_collate"),
 )
@@ -447,13 +464,47 @@ test_cfg = dict(type="TestLoop")
 optim_wrapper = dict(
     # `tools/train.py --amp` upgrades this wrapper to `AmpOptimWrapper`.
     type="OptimWrapper",
-    optimizer=dict(type="AdamW", lr=2e-4, betas=(0.95, 0.99), weight_decay=0.01),
+    optimizer=dict(type="AdamW", lr=1e-4, betas=(0.95, 0.99), weight_decay=0.01),
     clip_grad=dict(max_norm=35.0, norm_type=2),
 )
 
 param_scheduler = [
-    dict(type="LinearLR", start_factor=0.1, by_epoch=False, begin=0, end=1000),
-    dict(type="CosineAnnealingLR", by_epoch=True, begin=0, end=20, T_max=20, eta_min=1e-6),
+    dict(
+        type="CosineAnnealingLR",
+        T_max=8,
+        eta_min=1e-4 * 10,
+        begin=0,
+        end=8,
+        by_epoch=True,
+        convert_to_iter_based=True,
+    ),
+    dict(
+        type="CosineAnnealingLR",
+        T_max=12,
+        eta_min=1e-4 * 1e-4,
+        begin=8,
+        end=20,
+        by_epoch=True,
+        convert_to_iter_based=True,
+    ),
+    dict(
+        type="CosineAnnealingMomentum",
+        T_max=8,
+        eta_min=0.8947368421052632,
+        begin=0,
+        end=8,
+        by_epoch=True,
+        convert_to_iter_based=True,
+    ),
+    dict(
+        type="CosineAnnealingMomentum",
+        T_max=12,
+        eta_min=1.0,
+        begin=8,
+        end=20,
+        by_epoch=True,
+        convert_to_iter_based=True,
+    ),
 ]
 
 default_hooks = dict(

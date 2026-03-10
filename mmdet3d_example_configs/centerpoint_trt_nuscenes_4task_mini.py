@@ -8,7 +8,9 @@ _base_ = ["./centerpoint_trt_nuscenes_4task_train.py"]
 
 train_dataloader = dict(
     dataset=dict(
-        ann_file="nuscenes_infos_train.pkl",
+        dataset=dict(
+            ann_file="nuscenes_infos_train.pkl",
+        ),
     ),
 )
 
