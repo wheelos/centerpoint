@@ -188,12 +188,68 @@ class_mapping = {
     "bicycle": 2,
     "motorcycle": 2,
     "traffic_cone": 3,
-    "barrier": 3,  # optional: treat barrier as small obstacle
 }
 
+db_sampler = dict(
+    data_root=data_root,
+    info_path=data_root + "nuscenes_dbinfos_train.pkl",
+    rate=1.0,
+    prepare=dict(
+        filter_by_difficulty=[-1],
+        filter_by_min_points=dict(
+            car=5,
+            truck=5,
+            construction_vehicle=5,
+            bus=5,
+            trailer=5,
+            pedestrian=5,
+            motorcycle=5,
+            bicycle=5,
+            traffic_cone=5,
+        ),
+    ),
+    classes=[
+        "car",
+        "truck",
+        "construction_vehicle",
+        "bus",
+        "trailer",
+        "pedestrian",
+        "motorcycle",
+        "bicycle",
+        "traffic_cone",
+    ],
+    sample_groups=dict(
+        car=2,
+        truck=3,
+        construction_vehicle=7,
+        bus=4,
+        trailer=6,
+        pedestrian=6,
+        motorcycle=6,
+        bicycle=6,
+        traffic_cone=2,
+    ),
+    points_loader=dict(
+        type="LoadPointsFromFile",
+        coord_type="LIDAR",
+        load_dim=5,
+        use_dim=5,
+    ),
+)
+
 train_pipeline = [
-    dict(type="LoadPointsFromFile", coord_type="LIDAR", load_dim=5, use_dim=4),
+    dict(type="LoadPointsFromFile", coord_type="LIDAR", load_dim=5, use_dim=5),
+    dict(
+        type="LoadPointsFromMultiSweeps",
+        sweeps_num=9,
+        load_dim=5,
+        use_dim=[0, 1, 2, 3, 4],
+        pad_empty_sweeps=True,
+        remove_close=True,
+    ),
     dict(type="LoadAnnotations3D", with_bbox_3d=True, with_label_3d=True),
+    dict(type="ObjectSample", db_sampler=db_sampler),
     # Training-time augmentation. These are not part of Apollo car-side preprocessing.
     dict(type="PointsRangeFilter", point_cloud_range=point_cloud_range),
     dict(type="ObjectRangeFilter", point_cloud_range=point_cloud_range),
@@ -215,7 +271,16 @@ train_pipeline = [
 ]
 
 val_pipeline = [
-    dict(type="LoadPointsFromFile", coord_type="LIDAR", load_dim=5, use_dim=4),
+    dict(type="LoadPointsFromFile", coord_type="LIDAR", load_dim=5, use_dim=5),
+    dict(
+        type="LoadPointsFromMultiSweeps",
+        sweeps_num=9,
+        load_dim=5,
+        use_dim=[0, 1, 2, 3, 4],
+        pad_empty_sweeps=True,
+        remove_close=True,
+        test_mode=True,
+    ),
     dict(type="LoadAnnotations3D", with_bbox_3d=True, with_label_3d=True),
     dict(type="PointsRangeFilter", point_cloud_range=point_cloud_range),
     dict(type="ObjectRangeFilter", point_cloud_range=point_cloud_range),
@@ -224,7 +289,16 @@ val_pipeline = [
 ]
 
 test_pipeline = [
-    dict(type="LoadPointsFromFile", coord_type="LIDAR", load_dim=5, use_dim=4),
+    dict(type="LoadPointsFromFile", coord_type="LIDAR", load_dim=5, use_dim=5),
+    dict(
+        type="LoadPointsFromMultiSweeps",
+        sweeps_num=9,
+        load_dim=5,
+        use_dim=[0, 1, 2, 3, 4],
+        pad_empty_sweeps=True,
+        remove_close=True,
+        test_mode=True,
+    ),
     dict(type="PointsRangeFilter", point_cloud_range=point_cloud_range),
     dict(type="Pack3DDetInputs", keys=["points"]),
 ]
@@ -300,17 +374,68 @@ test_dataloader = dict(
 # - This example collapses many classes into 4 tasks, so we provide a simple
 #   internal BEV mAP metric as a sanity check (not the official nuScenes score).
 #
-val_evaluator = dict(
-    type="ApolloMergedClassMetric3D",
-    class_names=["car", "pedestrian", "bicycle", "traffic_cone"],
-    iou_thr=[0.5, 0.25, 0.25, 0.25],
-    max_dets=500,
-    score_thr=0.0,
-    # Optional: use the same post_center_limit_range as model test_cfg.
-    center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
-)
+val_evaluator = [
+    dict(
+        type="ApolloMergedClassMetric3D",
+        class_names=["car", "pedestrian", "bicycle", "traffic_cone"],
+        iou_thr=[0.5, 0.25, 0.25, 0.25],
+        max_dets=500,
+        score_thr=0.0,
+        center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
+    ),
+    dict(
+        type="ApolloCenterRecallMetric3D",
+        prefix="apollo_center",
+        class_names=["car", "pedestrian", "bicycle", "traffic_cone"],
+        distance_thr=0.5,
+        max_dets=500,
+        score_thr=0.0,
+        center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
+    ),
+]
 
 test_evaluator = val_evaluator
+
+train_eval_dataloader = dict(
+    batch_size=1,
+    num_workers=2,
+    persistent_workers=True,
+    sampler=dict(type="DefaultSampler", shuffle=False),
+    dataset=dict(
+        type="NuScenesDataset",
+        data_root=data_root,
+        ann_file="nuscenes_infos_train.pkl",
+        data_prefix=dict(
+            pts="samples/LIDAR_TOP",
+            sweeps="sweeps/LIDAR_TOP",
+        ),
+        metainfo=dict(classes=nuscenes_classes),
+        pipeline=val_pipeline,
+        test_mode=False,
+    ),
+    collate_fn=dict(type="pseudo_collate"),
+)
+
+train_evaluator = [
+    dict(
+        type="ApolloMergedClassMetric3D",
+        prefix="train_apollo",
+        class_names=["car", "pedestrian", "bicycle", "traffic_cone"],
+        iou_thr=[0.5, 0.25, 0.25, 0.25],
+        max_dets=500,
+        score_thr=0.0,
+        center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
+    ),
+    dict(
+        type="ApolloCenterRecallMetric3D",
+        prefix="train_center",
+        class_names=["car", "pedestrian", "bicycle", "traffic_cone"],
+        distance_thr=0.5,
+        max_dets=500,
+        score_thr=0.0,
+        center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
+    ),
+]
 
 # -------------------------
 # Runtime / optimization
@@ -347,6 +472,13 @@ default_hooks = dict(
 )
 
 custom_hooks = [
+    dict(
+        type="ApolloTrainEvalHook",
+        dataloader=train_eval_dataloader,
+        evaluator=train_evaluator,
+        interval=1,
+        start_epoch=1,
+    ),
     dict(
         type="ApolloEarlyStoppingHook",
         monitor="apollo/mAP",
