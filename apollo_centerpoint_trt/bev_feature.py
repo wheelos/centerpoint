@@ -246,14 +246,16 @@ class ApolloBevFeatureGenerator(torch.nn.Module):
     sum_i = _scatter_add(intensity, grid_idx, self.map_size)
     ones = torch.ones((grid_idx.size(0), 1), dtype=dtype, device=device)
     cnt = _scatter_add(ones, grid_idx, self.map_size)
-    mean_h = sum_h / cnt.clamp_min_(1.0)
-    mean_i = sum_i / cnt.clamp_min_(1.0)
+    cnt_safe = cnt.clamp_min(1.0)
+    mean_h = sum_h / cnt_safe
+    mean_i = sum_i / cnt_safe
 
     # Align to C++/CUDA:
     # - empty cell: max_height is set to 0
     # - top_intensity is set for points where pz == max_height (ties are not
     #   strictly defined in the CUDA implementation; we pick a stable value).
-    max_h = torch.where(cnt > 0, max_h, torch.zeros_like(max_h))
+    nonempty_mask = cnt > 0
+    max_h = torch.where(nonempty_mask, max_h, torch.zeros_like(max_h))
 
     max_h_pts = max_h[grid_idx]
     same_as_max = (pz == max_h_pts)
@@ -263,8 +265,9 @@ class ApolloBevFeatureGenerator(torch.nn.Module):
         intensity.new_full(intensity.shape, -torch.finfo(dtype).max),
     )
     top_i = _scatter_max(masked_i, grid_idx, self.map_size)
+    top_i = torch.where(nonempty_mask, top_i, torch.zeros_like(top_i))
 
-    nonempty = (cnt > 0).to(dtype)
+    nonempty = nonempty_mask.to(dtype)
     # count: int(log(1 + n)) stored into float buffer
     count_int = cnt.to(torch.int64)
     count_feat = torch.floor(torch.log1p(count_int.to(dtype))).to(dtype)
@@ -317,6 +320,15 @@ class ApolloBevFeatureGenerator(torch.nn.Module):
 
     # scatter max-pool pillar_feature to BEV grid (must keep grad for training)
     bev_pf = _scatter_max(pillar_feature, grid_idx, self.map_size)  # [map, 48]
+    if grid_idx.numel() > 0:
+      counts = _scatter_add(
+          torch.ones((grid_idx.size(0), 1), dtype=bev_pf.dtype, device=bev_pf.device),
+          grid_idx,
+          self.map_size,
+      )
+      bev_pf = torch.where(counts > 0, bev_pf, torch.zeros_like(bev_pf))
+    else:
+      bev_pf = torch.zeros_like(bev_pf)
 
     channels = [bev_pf]
     if cfg.use_cnnseg_features:

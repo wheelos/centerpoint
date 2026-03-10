@@ -294,6 +294,10 @@ This repo includes an example MMDet3D 1.x training scaffold for nuScenes:
   - includes a full MMEngine runner config: dataloaders, loops, optimizer, scheduler, hooks
   - validates with `ApolloMergedClassMetric3D` (internal merged-class BEV mAP, not official nuScenes metric)
   - early-stops on `apollo/mAP` after patience is exhausted
+- `mmdet3d_example_configs/centerpoint_trt_nuscenes_4task_mini.py`
+  - same training recipe as the main config
+  - swaps `ann_file` to `nuscenes_mini_infos_{train,val}.pkl`
+  - useful for smoke tests that still let you inspect loss / metric trends
 
 Example command:
 

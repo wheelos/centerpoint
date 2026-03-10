@@ -23,6 +23,14 @@ def _to_numpy(x: Any) -> np.ndarray:
   return np.asarray(x)
 
 
+def _get_field(obj: Any, name: str, default: Any = None) -> Any:
+  if obj is None:
+    return default
+  if isinstance(obj, dict):
+    return obj.get(name, default)
+  return getattr(obj, name, default)
+
+
 def _filter_range(boxes: Any, scores: Any, labels: Any,
                   center_range: Sequence[float]) -> Tuple[Any, Any, Any]:
   if boxes is None:
@@ -87,14 +95,17 @@ def _bev_boxes_xywhr(boxes_3d: Any) -> Any:
 
 def _box_iou_rotated_bev(a_bev: Any, b_bev: Any) -> np.ndarray:
   """BEV IoU using mmcv's rotated box IoU if available (fallback axis-aligned)."""
-  if torch is not None and hasattr(torch, "is_tensor") and torch.is_tensor(a_bev):
-    a_t = a_bev
-    b_t = b_bev
+  if torch is None:
+    raise RuntimeError("ApolloMergedClassMetric3D requires torch in the runtime.")
+
+  if torch.is_tensor(a_bev):
+    a_t = a_bev.detach().to(device="cpu", dtype=torch.float32)
   else:
-    if torch is None:
-      raise RuntimeError("ApolloMergedClassMetric3D requires torch in the runtime.")
-    a_t = torch.as_tensor(a_bev, dtype=torch.float32)
-    b_t = torch.as_tensor(b_bev, dtype=torch.float32)
+    a_t = torch.as_tensor(a_bev, dtype=torch.float32, device="cpu")
+  if torch.is_tensor(b_bev):
+    b_t = b_bev.detach().to(device="cpu", dtype=torch.float32)
+  else:
+    b_t = torch.as_tensor(b_bev, dtype=torch.float32, device="cpu")
 
   if a_t.numel() == 0 or b_t.numel() == 0:
     return np.zeros((int(a_t.shape[0]), int(b_t.shape[0])), dtype=np.float32)
@@ -202,20 +213,47 @@ class ApolloMergedClassMetric3D(BaseMetric):
 
     self._agg = [_ClassAgg() for _ in range(len(self.class_names))]
 
+  def _reset_agg(self) -> None:
+    self._agg = [_ClassAgg() for _ in range(len(self.class_names))]
+
+  def _extract_gt_labels(self, gt: Any) -> Any:
+    labels = _get_field(gt, "labels_3d", None)
+    if labels is None:
+      labels = _get_field(gt, "labels", None)
+    return labels
+
+  def _extract_batch_samples(self, data_batch: Any) -> Sequence[Any]:
+    if isinstance(data_batch, dict):
+      samples = data_batch.get("data_samples", None)
+      if isinstance(samples, Sequence):
+        return samples
+    return ()
+
   def process(self, data_batch: Any, data_samples: Sequence[Any]) -> None:  # type: ignore[override]
-    for sample in data_samples:
-      gt = getattr(sample, "gt_instances_3d", None)
-      pred = getattr(sample, "pred_instances_3d", None)
+    batch_samples = self._extract_batch_samples(data_batch)
+    if batch_samples and len(batch_samples) == len(data_samples):
+      sample_pairs = zip(batch_samples, data_samples)
+    else:
+      sample_pairs = zip(data_samples, data_samples)
+
+    for gt_sample, pred_sample in sample_pairs:
+      gt = _get_field(gt_sample, "gt_instances_3d", None)
+      pred = _get_field(pred_sample, "pred_instances_3d", None)
+      if gt is None:
+        gt = _get_field(pred_sample, "gt_instances_3d", None)
+      # Keep BaseMetric's `results` non-empty so MMEngine does not warn and so
+      # each evaluation round has a clear lifecycle.
+      self.results.append(1)
       if gt is None or pred is None:
         continue
 
-      gt_boxes = getattr(gt, "bboxes_3d", None)
-      gt_labels = getattr(gt, "labels_3d", None)
-      pred_boxes = getattr(pred, "bboxes_3d", None)
-      pred_labels = getattr(pred, "labels_3d", None)
-      pred_scores = getattr(pred, "scores_3d", None)
+      gt_boxes = _get_field(gt, "bboxes_3d", None)
+      gt_labels = self._extract_gt_labels(gt)
+      pred_boxes = _get_field(pred, "bboxes_3d", None)
+      pred_labels = _get_field(pred, "labels_3d", None)
+      pred_scores = _get_field(pred, "scores_3d", None)
       if pred_scores is None:
-        pred_scores = getattr(pred, "scores", None)
+        pred_scores = _get_field(pred, "scores", None)
 
       gt_boxes, _, gt_labels = _filter_range(gt_boxes, None, gt_labels, self.center_range)
       pred_boxes, pred_scores, pred_labels = _filter_range(
@@ -308,6 +346,9 @@ class ApolloMergedClassMetric3D(BaseMetric):
 
     if aps:
       metrics["mAP"] = float(np.nanmean(np.asarray(aps, dtype=np.float32)))
+    else:
+      metrics["mAP"] = float("nan")
+    self._reset_agg()
     return metrics
 
 
@@ -325,4 +366,3 @@ try:  # pragma: no cover
   register_to_mmdet3d()
 except Exception:
   pass
-

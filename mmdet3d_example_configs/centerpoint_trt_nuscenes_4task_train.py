@@ -61,6 +61,7 @@ pts_neck = dict(
 
 head_train_cfg = dict(
     pts=dict(
+        point_cloud_range=point_cloud_range,
         grid_size=[512, 512, 1],
         voxel_size=[0.2, 0.2, 7.0],
         out_size_factor=4,
@@ -68,12 +69,14 @@ head_train_cfg = dict(
         gaussian_overlap=0.1,
         max_objs=500,
         min_radius=2,
-        code_weights=[1.0] * 7,
+        code_weights=[1.0, 1.0, 1.0, 1.0, 1.0,
+                      1.0, 1.0, 1.0, 0.2, 0.2],
     )
 )
 
 head_test_cfg = dict(
     pts=dict(
+        point_cloud_range=point_cloud_range,
         post_center_limit_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
         max_per_img=500,
         max_pool_nms=False,
@@ -101,11 +104,14 @@ pts_bbox_head = dict(
     type="CenterHead",
     in_channels=384,
     tasks=tasks,
+    # nuScenes training in MMDet3D expects a velocity branch. Apollo export
+    # still drops `vel` and only packs reg/height/dim/rot-derived outputs.
     common_heads=dict(
         reg=(2, 2),
         height=(1, 2),
         dim=(3, 2),
         rot=(2, 2),
+        vel=(2, 2),
     ),
     share_conv_channel=64,
     bbox_coder=dict(
@@ -116,7 +122,7 @@ pts_bbox_head = dict(
         score_threshold=0.1,
         out_size_factor=4,
         voxel_size=[0.2, 0.2],
-        code_size=7,
+        code_size=9,
     ),
     separate_head=dict(type="SeparateHead", init_bias=-2.19, final_kernel=3),
     loss_cls=dict(_scope_="mmdet", type="GaussianFocalLoss", reduction="mean"),
@@ -143,7 +149,18 @@ model = dict(
 # -------------------------
 # nuScenes dataset scaffold
 # -------------------------
-data_root = "data/nuscenes/"
+#
+# Expected layout for this config:
+# data/
+#   nuscenes_infos_train.pkl
+#   nuscenes_infos_val.pkl
+#   nuscenes_dbinfos_train.pkl
+#   nuscenes_gt_database/
+#   samples/
+#   sweeps/
+#   maps/
+#   v1.0-*/
+data_root = "data/"
 
 # nuScenes canonical 10 classes (MMDet3D nuScenes converters usually follow this order).
 nuscenes_classes = [
@@ -221,6 +238,10 @@ train_dataloader = dict(
         type="NuScenesDataset",
         data_root=data_root,
         ann_file="nuscenes_infos_train.pkl",
+        data_prefix=dict(
+            pts="samples/LIDAR_TOP",
+            sweeps="sweeps/LIDAR_TOP",
+        ),
         metainfo=dict(classes=nuscenes_classes),
         pipeline=train_pipeline,
         test_mode=False,
@@ -237,6 +258,10 @@ val_dataloader = dict(
         type="NuScenesDataset",
         data_root=data_root,
         ann_file="nuscenes_infos_val.pkl",
+        data_prefix=dict(
+            pts="samples/LIDAR_TOP",
+            sweeps="sweeps/LIDAR_TOP",
+        ),
         metainfo=dict(classes=nuscenes_classes),
         pipeline=val_pipeline,
         test_mode=False,
@@ -253,6 +278,10 @@ test_dataloader = dict(
         type="NuScenesDataset",
         data_root=data_root,
         ann_file="nuscenes_infos_val.pkl",
+        data_prefix=dict(
+            pts="samples/LIDAR_TOP",
+            sweeps="sweeps/LIDAR_TOP",
+        ),
         metainfo=dict(classes=nuscenes_classes),
         # Keep GT in the test loop because ApolloMergedClassMetric3D matches
         # predictions against packed `gt_instances_3d`.

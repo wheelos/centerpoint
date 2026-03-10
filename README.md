@@ -84,6 +84,29 @@ pip install -r requirements/requirements-cu121.txt
 
 ### 1) Train (MMDetection3D / MMEngine)
 
+Before training on nuScenes, prepare the MMDetection3D info `.pkl` files with
+the installed official converter:
+
+```bash
+bash tools/prepare_nuscenes_data.sh \
+  --root-path data/nuscenes \
+  --out-dir data/nuscenes \
+  --extra-tag nuscenes
+```
+
+This wrapper uses the currently active `python` / venv to locate the installed
+`mmdet3d` package and then calls its official `create_data.py`.
+
+For `v1.0-mini`, pass the version through to the same wrapper:
+
+```bash
+bash tools/prepare_nuscenes_data.sh \
+  --root-path data/nuscenes \
+  --out-dir data/nuscenes \
+  --extra-tag nuscenes \
+  --version v1.0-mini
+```
+
 Integrate `apollo_centerpoint_trt` as a plugin in your MMDetection3D repo and
 create a model that:
 
@@ -104,6 +127,13 @@ This repo includes a local training entrypoint:
 ```bash
 python3 tools/train.py \
   mmdet3d_example_configs/centerpoint_trt_nuscenes_4task_train.py
+```
+
+For a `v1.0-mini` smoke run with the same model / schedule:
+
+```bash
+python3 tools/train.py \
+  mmdet3d_example_configs/centerpoint_trt_nuscenes_4task_mini.py
 ```
 
 The bundled nuScenes config is a runnable scaffold for MMDetection3D 1.x, but

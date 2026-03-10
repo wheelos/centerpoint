@@ -34,21 +34,56 @@ def _is_mmengine_lazy_object(obj: Any) -> bool:
     return False
 
 
+def _find_non_finite(obj: Any, prefix: str = "") -> Optional[str]:
+  if torch is not None and torch.is_tensor(obj):
+    if not torch.isfinite(obj).all():
+      return prefix or "<tensor>"
+    return None
+  if isinstance(obj, dict):
+    for key, value in obj.items():
+      bad = _find_non_finite(value, f"{prefix}.{key}" if prefix else str(key))
+      if bad is not None:
+        return bad
+    return None
+  if isinstance(obj, (list, tuple)):
+    for index, value in enumerate(obj):
+      bad = _find_non_finite(value, f"{prefix}[{index}]" if prefix else f"[{index}]")
+      if bad is not None:
+        return bad
+  return None
+
+
 def _rotate_boxes_inplace(boxes: Any, angle_rad: float) -> Any:
   """Rotate 3D boxes around z-axis by `angle_rad` in-place if possible."""
-  if hasattr(boxes, "rotate"):
-    try:
-      # common signature: rotate(angle, points=None)
-      boxes.rotate(angle_rad)
-      return boxes
-    except TypeError:
-      # some versions return (boxes, points)
-      out = boxes.rotate(angle_rad)
-      return out[0] if isinstance(out, (tuple, list)) else out
-
-  # Fallback: try tensor-level rotate.
   if not hasattr(boxes, "tensor"):
+    if hasattr(boxes, "rotate"):
+      try:
+        boxes.rotate(angle_rad)
+        return boxes
+      except TypeError:
+        out = boxes.rotate(angle_rad)
+        return out[0] if isinstance(out, (tuple, list)) else out
     raise TypeError(f"Unsupported boxes type for rotation: {type(boxes)}")
+
+  box_tensor = getattr(boxes, "tensor")
+  if torch is not None and torch.is_tensor(box_tensor):
+    angle = box_tensor.new_tensor(float(angle_rad))
+    c = torch.cos(angle)
+    s = torch.sin(angle)
+
+    x = box_tensor[:, 0].clone()
+    y = box_tensor[:, 1].clone()
+    box_tensor[:, 0] = c * x - s * y
+    box_tensor[:, 1] = s * x + c * y
+    if box_tensor.size(1) >= 7:
+      box_tensor[:, 6] = box_tensor[:, 6] + angle
+    if box_tensor.size(1) >= 9:
+      vx = box_tensor[:, 7].clone()
+      vy = box_tensor[:, 8].clone()
+      box_tensor[:, 7] = c * vx - s * vy
+      box_tensor[:, 8] = s * vx + c * vy
+    return boxes
+
   t = boxes.tensor.clone()
   c = math.cos(angle_rad)
   s = math.sin(angle_rad)
@@ -58,6 +93,11 @@ def _rotate_boxes_inplace(boxes: Any, angle_rad: float) -> Any:
   t[:, 1] = s * x + c * y
   if t.size(1) >= 7:
     t[:, 6] = t[:, 6] + angle_rad
+  if t.size(1) >= 9:
+    vx = t[:, 7].clone()
+    vy = t[:, 8].clone()
+    t[:, 7] = c * vx - s * vy
+    t[:, 8] = s * vx + c * vy
   if hasattr(boxes, "new_box"):
     return boxes.new_box(t)
   return boxes.__class__(t)
@@ -182,19 +222,53 @@ if torch is not None and not _is_lazy_proxy(torch):
 
     def _build_canvas_batch(self, points: List[torch.Tensor]) -> torch.Tensor:
       canvases = []
-      for pts in points:
+      for sample_idx, pts in enumerate(points):
         pts_xyzi = self._points_to_xyzi(pts)
+        bad_pts = _find_non_finite(pts_xyzi, f"points[{sample_idx}]")
+        if bad_pts is not None:
+          raise RuntimeError(f"Non-finite value detected in {bad_pts}")
         voxels, _, _ = self.bev_gen.build_voxel_features(pts_xyzi)
+        bad_voxels = _find_non_finite(voxels, f"voxels[{sample_idx}]")
+        if bad_voxels is not None:
+          raise RuntimeError(f"Non-finite value detected in {bad_voxels}")
+        if voxels.size(0) == 0:
+          gx = self.bev_gen.grid_x_size
+          gy = self.bev_gen.grid_y_size
+          channels = (
+              self.bev_gen.cfg.pillar_feature_dim +
+              self.bev_gen.cfg.cnnseg_feature_dim
+          )
+          canvas = pts_xyzi.new_zeros((1, channels, gx, gy))
+          bad_canvas = _find_non_finite(canvas, f"canvas[{sample_idx}]")
+          if bad_canvas is not None:
+            raise RuntimeError(f"Non-finite value detected in {bad_canvas}")
+          canvases.append(canvas.squeeze(0))
+          continue
         pillar_feature = self.pfe(voxels)  # [M, 48]
+        bad_pillar = _find_non_finite(pillar_feature, f"pillar_feature[{sample_idx}]")
+        if bad_pillar is not None:
+          raise RuntimeError(f"Non-finite value detected in {bad_pillar}")
         canvas = self.bev_gen(pts_xyzi, pillar_feature)  # [1, C, gx, gy]
+        bad_canvas = _find_non_finite(canvas, f"canvas[{sample_idx}]")
+        if bad_canvas is not None:
+          raise RuntimeError(f"Non-finite value detected in {bad_canvas}")
         canvases.append(canvas.squeeze(0))
       return torch.stack(canvases, dim=0)
 
     def extract_feat(self, points: List[torch.Tensor]) -> Any:
       canvas = self._build_canvas_batch(points)
+      bad_canvas = _find_non_finite(canvas, "canvas_batch")
+      if bad_canvas is not None:
+        raise RuntimeError(f"Non-finite value detected in {bad_canvas}")
       x = self.pts_backbone(canvas)
+      bad_backbone = _find_non_finite(x, "pts_backbone")
+      if bad_backbone is not None:
+        raise RuntimeError(f"Non-finite value detected in {bad_backbone}")
       if self.pts_neck is not None:
         x = self.pts_neck(x)
+        bad_neck = _find_non_finite(x, "pts_neck")
+        if bad_neck is not None:
+          raise RuntimeError(f"Non-finite value detected in {bad_neck}")
       return x
 
     def _rotate_gt_inplace(self, data_samples: list, angle_rad: float) -> None:
@@ -205,7 +279,9 @@ if torch is not None and not _is_lazy_proxy(torch):
         b = getattr(gt, "bboxes_3d", None)
         if b is None:
           continue
-        _rotate_boxes_inplace(b, angle_rad)
+        rotated = _rotate_boxes_inplace(b, angle_rad)
+        if rotated is not b:
+          setattr(gt, "bboxes_3d", rotated)
 
     def _head_loss(self, feats: Any, data_samples: list) -> dict:
       feats_list = feats if isinstance(feats, (list, tuple)) else [feats]
@@ -296,7 +372,13 @@ if torch is not None and not _is_lazy_proxy(torch):
         self._rotate_gt_inplace(data_samples, angle)
       try:
         feats = self.extract_feat(points)
+        bad_feat = _find_non_finite(feats, "feats")
+        if bad_feat is not None:
+          raise RuntimeError(f"Non-finite value detected in {bad_feat}")
         losses = self._head_loss(feats, data_samples)
+        bad_loss = _find_non_finite(losses, "losses")
+        if bad_loss is not None:
+          raise RuntimeError(f"Non-finite value detected in {bad_loss}")
       finally:
         if angle != 0.0:
           self._rotate_gt_inplace(data_samples, -angle)
