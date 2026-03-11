@@ -18,3 +18,4 @@ from .metrics.merged_ap_3d import ApolloMergedClassMetric3D  # noqa: F401
 from .metrics.center_recall_3d import ApolloCenterRecallMetric3D  # noqa: F401
 from .hooks.early_stopping import ApolloEarlyStoppingHook  # noqa: F401
 from .hooks.train_eval import ApolloTrainEvalHook  # noqa: F401
+from .datasets.custom_lidar_dataset import CustomLidarDataset  # noqa: F401

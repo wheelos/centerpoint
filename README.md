@@ -214,6 +214,38 @@ Copy the exported files into Apollo work_root, e.g.:
 
 Then clear TensorRT engine cache if needed (or use distinct cache suffixes).
 
+### 3) Evaluate exported ONNX directly
+
+For quantitative evaluation of one exported ONNX pair, run the config's `val`
+or `test` dataloader directly against the exported files:
+
+```bash
+python3 tools/test_onnx.py \
+  --config mmdet3d_example_configs/centerpoint_trt_nuscenes_4task_train.py \
+  --split test \
+  --name retrained \
+  --pfe-onnx /path/to/export/cpdet_pfe.onnx \
+  --backbone-onnx /path/to/export/cpdet_backbone.onnx
+```
+
+Implementation notes:
+
+- Point-cloud preprocessing and BEV feature generation still use this repo's
+  `CenterPointTRTDetector` / `ApolloBevFeatureGenerator`, so ONNX evaluation
+  stays aligned with the current Apollo-style preprocessing logic.
+- The script runs both exported ONNX stages:
+  - `voxels -> pillar_feature`
+  - `canvas_feature -> scores / bbox_preds / dir_scores`
+- Box decoding and metrics reuse the MMDetection3D head + this repo's internal
+  evaluators, so repeated runs are directly comparable under the same dataset
+  and metric definitions.
+- For quantitative comparison, use a split that still has GT in the dataloader.
+  In the bundled config, `test_dataloader` intentionally keeps GT and currently
+  points to `nuscenes_infos_val.pkl`.
+
+`tools/test_onnx.py` requires `onnxruntime` (CPU) or `onnxruntime-gpu`
+installed in the active environment.
+
 ### Export "empty" (untrained) ONNX for Netron inspection
 
 If you only want to inspect the graph structure in Netron, you can export

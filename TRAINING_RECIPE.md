@@ -379,23 +379,9 @@ nuScenes 与 Apollo 当前类别映射是：
 - 不是训练集指标
 
 
-## 9. 当前这套训练流程的定位
-
-这套训练流程当前更适合做三件事：
-
-- 验证 Apollo 对齐训练链路是否正确
-- 验证 4-task 合同下是否能学起来
-- 为后续完整 `trainval` 训练做铺垫
-
-它当前还 **不是**：
-
-- 官方 nuScenes 最优 recipe
-- 纯粹为了刷 nuScenes 指标的强 baseline
-
-
 ## 10. 当前最值得关注的指标
 
-如果你的业务更关心：
+业务更关心：
 
 - 车能不能被检测出来
 - 中心点偏几十厘米是否可接受
@@ -409,21 +395,3 @@ nuScenes 与 Apollo 当前类别映射是：
 
 - `train_apollo/AP/car`
 - `apollo/AP/car`
-
-解释方式：
-
-- 如果 `Recall@0.5m/car` 很低，说明连中心点都没学好
-- 如果 recall 还行，但 AP 很低，说明框质量 / 排序 / NMS 还有问题
-
-
-## 11. 后续建议
-
-如果下一步要继续提升效果，优先顺序建议是：
-
-1. 用完整 `trainval` 训练，而不是继续只看 `mini`
-2. 继续观察 `car` 的 `Recall@0.5m`
-3. 调整 `test_cfg` 和 task 级参数
-4. 如果 Apollo-lite 从零训练始终上不去，考虑：
-   - 先跑官方强 baseline
-   - 再做蒸馏 / 初始化迁移到 Apollo 模型
-

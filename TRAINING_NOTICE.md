@@ -1,8 +1,6 @@
-# CenterPointTRT (Apollo) — Training/Export Handoff Notes
+# CenterPointTRT (Apollo) — Training/Export Notes
 
 This document captures the current state of the `center_point_trt_mmdet3d` toolchain, and what to watch out for when continuing with **MMDetection3D training code**.
-
-It is written for future new teammates to pick up quickly.
 
 ## Goal & Current Status
 

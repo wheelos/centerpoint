@@ -19,4 +19,5 @@ numpy>=1.23,<2.0
 pyquaternion>=0.9.9
 tensorboard>=2.14,<2.18
 onnx>=1.14,<1.17
+onnxruntime
 
