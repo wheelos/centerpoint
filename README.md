@@ -1,6 +1,6 @@
 # CenterPointTRT — MMDetection3D Training + ONNX Export
 
-This folder provides a **training + export scaffold** for the Wheel.OS business version
+This folder provides a **training + export scaffold** for the Wheel.OS Apollo-lite version
 `CenterPointTRT` inference contract used in this repo:
 
 - `cpdet_pfe.onnx`: point-wise PFE, **`voxels -> pillar_feature`**
@@ -11,7 +11,6 @@ implementation. They are done by C++/CUDA pre/post-processing.
 
 ## Contract (must match car-side inference)
 
-From `modules/perception/lidar_cpdet_detection/data/cpdet_param.pb.txt` on Apollo business version and the
 current C++ inference:
 
 - PFE input `voxels`: `[N, 9]` (or `[N, 1, 9, 1]`) where each row is a **point**
