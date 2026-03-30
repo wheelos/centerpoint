@@ -5,7 +5,10 @@ import io
 import json
 import runpy
 import uuid
+import sys
 from types import SimpleNamespace
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import numpy as np
 from fastapi import FastAPI, File, UploadFile, HTTPException
@@ -89,6 +92,29 @@ def _load_points_from_path(path: str) -> np.ndarray:
         raise FileNotFoundError(path)
 
     suffix = os.path.splitext(path)[1].lower()
+    if suffix == ".pcd":
+        # Custom PCD parser to preserve arbitrary channels (e.g. intensity)
+        with open(path, "rb") as f:
+            lines = []
+            while True:
+                line = f.readline().decode('utf-8', errors='ignore')
+                lines.append(line)
+                if line.startswith("DATA"):
+                    break
+
+        data_type = lines[-1].strip().split()[1]
+
+        if data_type.lower() == "ascii":
+            pts = np.loadtxt(path, skiprows=len(lines), dtype=np.float32)
+        else:
+            # Fallback to Open3D if binary, and pad intensity to 0
+            import open3d as o3d
+            pcd = o3d.io.read_point_cloud(path)
+            pts3 = np.asarray(pcd.points, dtype=np.float32)
+            pts = np.concatenate([pts3, np.zeros((pts3.shape[0], 1), dtype=np.float32)], axis=1)
+
+        return pts
+
     if suffix == ".npy":
         arr = np.load(path)
         return arr.astype(np.float32)
