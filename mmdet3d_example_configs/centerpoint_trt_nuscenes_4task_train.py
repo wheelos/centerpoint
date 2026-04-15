@@ -42,6 +42,15 @@ bev_feature_cfg = dict(
 pfe_cfg = dict(in_channels=9, out_channels=48)
 point_cloud_range = [-51.2, -51.2, -3.5, 51.2, 51.2, 3.5]
 
+trt_binding_cfg = dict(
+    input_voxels="voxels",
+    pillar_feature_blob="pillar_feature",
+    input_canvas_feature="canvas_feature",
+    output_box="bbox_preds",
+    output_cls="scores",
+    output_dir="dir_scores",
+)
+
 # -------------------------
 # CenterPoint backbone/neck/head (Apollo-lite)
 # -------------------------
@@ -82,12 +91,13 @@ head_test_cfg = dict(
         max_pool_nms=False,
         min_radius=[4, 0.85, 0.85, 0.175],
         score_threshold=0.1,
+        task_score_thresholds=[0.25, 0.18, 0.40, 0.35],
         pc_range=[-51.2, -51.2],
         out_size_factor=4,
         voxel_size=[0.2, 0.2],
         nms_type="rotate",
-        pre_max_size=1000,
-        post_max_size=83,
+        pre_max_size=4096,
+        post_max_size=500,
         nms_thr=0.2,
     )
 )

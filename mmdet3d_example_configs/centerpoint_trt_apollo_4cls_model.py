@@ -42,6 +42,15 @@ bev_feature_cfg = dict(
 
 pfe_cfg = dict(in_channels=9, out_channels=48)
 
+trt_binding_cfg = dict(
+    input_voxels="voxels",
+    pillar_feature_blob="pillar_feature",
+    input_canvas_feature="canvas_feature",
+    output_box="bbox_preds",
+    output_cls="scores",
+    output_dir="dir_scores",
+)
+
 # For empty-export inspection, avoid building MMDet3D `CenterPoint` detector
 # directly (its init signature differs across versions). Instead, build only
 # the modules needed by Apollo export: backbone + neck + bbox_head.
@@ -83,6 +92,7 @@ test_cfg = dict(
         max_pool_nms=False,
         min_radius=[4, 4, 4, 4],
         score_threshold=0.1,
+        task_score_thresholds=[0.25, 0.18, 0.40, 0.35],
         pc_range=[-51.2, -51.2],
         out_size_factor=4,
         voxel_size=[0.2, 0.2],

@@ -20,9 +20,9 @@ app = FastAPI(title="centerpoint-inference")
 
 LABEL_MAP = {
     0: "car",
-    1: "truck",
-    2: "pedestrian",
-    3: "cyclist",
+    1: "pedestrian",
+    2: "cyclist",
+    3: "traffic_cone",
 }
 
 
@@ -191,6 +191,8 @@ class ONNXCenterpointRunner:
         # Ensure test_cfg is available
         if isinstance(self.head_cfg, dict):
             self.head = SimpleNamespace(test_cfg=self.head_cfg.get("test_cfg", self.head_cfg.get("test_cfg", {})), common_heads=self.head_cfg.get("common_heads"), separate_head=self.head_cfg.get("separate_head"))
+        binding_cfg = cfg_globals.get("trt_binding_cfg", {})
+        self.binding_cfg = binding_cfg if isinstance(binding_cfg, dict) else {}
 
     def _create_sessions(self):
         import onnxruntime as ort
@@ -224,10 +226,13 @@ class ONNXCenterpointRunner:
             return torch.zeros((1, channels, gy, gx), dtype=torch.float32)
 
         voxels_np = voxels.unsqueeze(1).unsqueeze(-1).cpu().numpy().astype(np.float32, copy=False)
-        outputs = self.pfe_session.run(None, {self.pfe_session.get_inputs()[0].name: voxels_np})
+        pfe_input_name = str(self.binding_cfg.get("input_voxels") or self.pfe_session.get_inputs()[0].name)
+        outputs = self.pfe_session.run(None, {pfe_input_name: voxels_np})
         output_map = self._resolve_output_map(self.pfe_session, outputs)
-        # try common names
-        pillar_feature_np = output_map.get("pillar_feature", outputs[0])
+        pfe_output_name = str(self.binding_cfg.get("pillar_feature_blob") or "pillar_feature")
+        pillar_feature_np = output_map.get(pfe_output_name)
+        if pillar_feature_np is None:
+            pillar_feature_np = output_map.get("pillar_feature", outputs[0])
         pillar_feature = torch.from_numpy(pillar_feature_np).to(dtype=pts_xyzi.dtype, device="cpu")
         canvas = self.bev_gen(pts_xyzi, pillar_feature)
         return canvas
@@ -366,6 +371,7 @@ class ONNXCenterpointRunner:
         import torch
         cfg = getattr(self.head, "test_cfg", {})
         score_threshold = float(cfg.get("score_threshold", 0.1))
+        task_score_thresholds = cfg.get("task_score_thresholds", None)
         pre_max_size = int(cfg.get("pre_max_size", 1000))
         post_max_size = int(cfg.get("post_max_size", 83))
         nms_thr = float(cfg.get("nms_thr", 0.2))
@@ -390,20 +396,21 @@ class ONNXCenterpointRunner:
             num_classes, feat_h, feat_w = heatmap.shape
 
             scores_flat = heatmap.reshape(num_classes, -1)
-            cls_scores, cls_ids = torch.max(scores_flat, dim=0)
-            keep_mask = cls_scores > score_threshold
+            cls_scores_all, cls_ids_all = torch.max(scores_flat, dim=0)
+            task_score_threshold = score_threshold
+            if isinstance(task_score_thresholds, (list, tuple)) and task_id < len(task_score_thresholds):
+                task_score_threshold = float(task_score_thresholds[task_id])
+            keep_mask = cls_scores_all > task_score_threshold
             if int(keep_mask.sum()) == 0:
                 continue
 
             candidate_idx = torch.nonzero(keep_mask, as_tuple=False).squeeze(1)
-            if candidate_idx.numel() > pre_max_size > 0:
-                topk_scores, topk_order = torch.topk(cls_scores[candidate_idx], k=pre_max_size)
-                candidate_idx = candidate_idx[topk_order]
-                cls_scores = topk_scores
-                cls_ids = cls_ids[candidate_idx]
-            else:
-                cls_scores = cls_scores[candidate_idx]
-                cls_ids = cls_ids[candidate_idx]
+            # threshold first, then keep the earliest valid feature-map positions
+            # up to pre_max_size instead of top-k, like apollo c++ inference
+            if pre_max_size > 0:
+                candidate_idx = candidate_idx[:pre_max_size]
+            cls_scores = cls_scores_all[candidate_idx]
+            cls_ids = cls_ids_all[candidate_idx]
 
             xs = candidate_idx % feat_w
             ys = torch.div(candidate_idx, feat_w, rounding_mode="floor")
@@ -478,12 +485,21 @@ class ONNXCenterpointRunner:
         for pts in points_list:
             canvas = self._build_canvas_feature(pts)
             canvas_np = canvas.cpu().numpy().astype(np.float32, copy=False)
-            ort_outputs = self.backbone_session.run(None, {self.backbone_session.get_inputs()[0].name: canvas_np})
+            backbone_input_name = str(self.binding_cfg.get("input_canvas_feature") or self.backbone_session.get_inputs()[0].name)
+            ort_outputs = self.backbone_session.run(None, {backbone_input_name: canvas_np})
             output_map = self._resolve_output_map(self.backbone_session, ort_outputs)
-            # try standard names
-            scores_np = output_map.get("scores", ort_outputs[0])
-            bbox_preds_np = output_map.get("bbox_preds", ort_outputs[1] if len(ort_outputs) > 1 else None)
-            dir_scores_np = output_map.get("dir_scores", ort_outputs[2] if len(ort_outputs) > 2 else None)
+            output_cls_name = str(self.binding_cfg.get("output_cls") or "scores")
+            output_box_name = str(self.binding_cfg.get("output_box") or "bbox_preds")
+            output_dir_name = str(self.binding_cfg.get("output_dir") or "dir_scores")
+            scores_np = output_map.get(output_cls_name)
+            bbox_preds_np = output_map.get(output_box_name)
+            dir_scores_np = output_map.get(output_dir_name)
+            if scores_np is None:
+                scores_np = output_map.get("scores", ort_outputs[0])
+            if bbox_preds_np is None:
+                bbox_preds_np = output_map.get("bbox_preds", ort_outputs[1] if len(ort_outputs) > 1 else None)
+            if dir_scores_np is None:
+                dir_scores_np = output_map.get("dir_scores", ort_outputs[2] if len(ort_outputs) > 2 else None)
             if bbox_preds_np is None or dir_scores_np is None:
                 raise RuntimeError("Backbone ONNX missing expected outputs")
             task_outs = self._build_head_outputs(scores_np, bbox_preds_np, dir_scores_np)
