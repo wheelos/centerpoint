@@ -121,9 +121,9 @@ def _extract_xyzi(header: PcdHeader, data: np.ndarray) -> np.ndarray:
 
 def load_pcd_xyzi(path: Path) -> np.ndarray:
   header, offset = _parse_header(path)
-  if header.data not in {"ascii", "binary"}:
+  if header.data not in {"ascii", "binary", "binary_compressed"}:
     raise ValueError(
-        f"Only ascii/binary PCD are supported for now; got DATA {header.data} in {path}"
+        f"Unsupported PCD DATA mode `{header.data}` in {path}"
     )
 
   if header.data == "ascii":
@@ -139,6 +139,18 @@ def load_pcd_xyzi(path: Path) -> np.ndarray:
     z = rows[:, name_to_index[_find_field(header, "z")]]
     intensity = rows[:, name_to_index[_find_field(header, "intensity")]]
     return np.stack((x, y, z, intensity), axis=1).astype(np.float32, copy=False)
+
+  if header.data == "binary_compressed":
+    # Open3D can decode compressed PCD, but it only exposes XYZ here.
+    # Keep the interface stable by padding intensity with zeros.
+    import open3d as o3d
+
+    pcd = o3d.io.read_point_cloud(str(path))
+    pts3 = np.asarray(pcd.points, dtype=np.float32)
+    return np.concatenate(
+        [pts3, np.zeros((pts3.shape[0], 1), dtype=np.float32)],
+        axis=1,
+    )
 
   dtype = _dtype_from_header(header)
   with path.open("rb") as f:

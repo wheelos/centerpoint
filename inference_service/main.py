@@ -518,10 +518,34 @@ def _ensure_runner():
     return RUNNER
 
 
+def _provider_status() -> dict:
+    desired = [p for p in os.environ.get("ORT_PROVIDERS", "CPUExecutionProvider").split(",") if p]
+    status = {
+        "desired_providers": desired,
+        "pfe_providers": [],
+        "backbone_providers": [],
+    }
+    if RUNNER is None:
+        return status
+    try:
+        status["pfe_providers"] = list(RUNNER.pfe_session.get_providers())
+        status["backbone_providers"] = list(RUNNER.backbone_session.get_providers())
+    except Exception:
+        pass
+    return status
+
+
 @app.get("/health")
 def health():
     ok = os.path.exists(PFE_ONNX) and os.path.exists(BACKBONE_ONNX) and os.path.exists(CONFIG_PY)
-    return {"status": "ok" if ok else "missing_files", "pfe": PFE_ONNX, "backbone": BACKBONE_ONNX, "config": CONFIG_PY}
+    body = {
+        "status": "ok" if ok else "missing_files",
+        "pfe": PFE_ONNX,
+        "backbone": BACKBONE_ONNX,
+        "config": CONFIG_PY,
+    }
+    body.update(_provider_status())
+    return body
 
 
 @app.get("/v1/health/live")
@@ -532,12 +556,20 @@ def health_live():
 @app.get("/v1/health/ready")
 def health_ready():
     ok = os.path.exists(PFE_ONNX) and os.path.exists(BACKBONE_ONNX) and os.path.exists(CONFIG_PY)
-    return {
+    body = {
         "status": "ok" if ok else "missing_files",
         "pfe": PFE_ONNX,
         "backbone": BACKBONE_ONNX,
         "config": CONFIG_PY,
     }
+    if ok:
+        try:
+            _ensure_runner()
+        except Exception as exc:
+            body["status"] = "init_failed"
+            body["error"] = str(exc)
+    body.update(_provider_status())
+    return body
 
 
 @app.post("/v1/inference/batch")

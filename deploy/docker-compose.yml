@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   centerpoint_inference:
     build:
@@ -8,12 +6,12 @@ services:
       dockerfile: deploy/Dockerfile
     image: centerpoint-inference:v1
     container_name: centerpoint_inference_service
-    # GPU access: legacy `runtime: nvidia` is more widely accepted by local docker-compose schemas.
-    # If your `docker compose` supports `device_requests`, you can replace this with that block.
-    runtime: nvidia
+    gpus: all
     environment:
       # Use gunicorn concurrency based on GPU memory. Override at compose/runtime if needed.
       - WEB_CONCURRENCY=1
+      # Runtime model/config root inside the container.
+      - REPO_ROOT=/app
       # Prefer CUDA provider in ONNX Runtime when available
       - ORT_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider
       # NVIDIA visibility (legacy fallback). Set to 'all' to expose all GPUs.
